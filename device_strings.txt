@@ -1,0 +1,5 @@
+wireless device string
+\\?\hid#vid_3554&pid_f55d&mi_01&col05#b&3819d31c&0&0004#{4d1e55b2-f16f-11cf-88cb-001111000030}
+
+wired device string
+\\?\hid#vid_3554&pid_f55e&mi_01&col05#a&1fefac06&0&0004#{4d1e55b2-f16f-11cf-88cb-001111000030}
