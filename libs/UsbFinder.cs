@@ -124,7 +124,7 @@ namespace DriverLib
 
     public static bool isWindow7() => Environment.OSVersion.Version.Major == 6 && Environment.OSVersion.Version.Minor == 1;
 
-    public static bool isX64System() => Environment.Is64BitOperatingSystem;
+    //public static bool isX64System() => Environment.Is64BitOperatingSystem;
 
     public static string[] GetDllVersion() => UsbFinder.CS_UsbFinder_GetDllVersion();
 

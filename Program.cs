@@ -1,9 +1,12 @@
 ﻿using DriverLib;
 using System;
 using System.Configuration;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using Timer = System.Windows.Forms.Timer;
 
 namespace RedragonBatteryIcon
 {
@@ -29,6 +32,7 @@ namespace RedragonBatteryIcon
         private static DeviceInfo wiredInfo;
         private static DeviceInfo wirelessInfo;
         private static System.Threading.Timer onlineCheck;
+        private static System.Threading.Timer refreshTask;
         private static BatteryStatus bs;
         private static readonly BatteryInfoDisplay batteryDisplay = new BatteryInfoDisplay();
 
@@ -39,9 +43,11 @@ namespace RedragonBatteryIcon
         private static void Main()
         {
             LogEntry("Starting up");
+            GetLastChargeLevel();
 
             UsbFinder.StartUsbChanged(OnUsbChangedEvent, 600);  // Assign a listener for any USB device changes
             onlineCheck = new System.Threading.Timer(CheckOnlineStatus, null, 1000, 5000);   // Start a thread that checks for device connection changes
+            refreshTask = new System.Threading.Timer(Refresh, null, 1000, 30000);
             trayTimer.Tick += TrayTickEvent;    // Assign a tick event for the tray timer
 
             // Setup the tray icon and battery info panel
@@ -57,7 +63,7 @@ namespace RedragonBatteryIcon
 
             if (bitmapIcon != null)
             {
-                BatteryTray.Icon = Icon.FromHandle(bitmapIcon.GetHicon());
+                SetIcon(bitmapIcon);
                 batteryDisplay.ChangeBatteryImage(bitmapIcon);
             }
             // ---
@@ -109,9 +115,8 @@ namespace RedragonBatteryIcon
                     if (string.IsNullOrEmpty(currentDevice) || device != currentDevice)
                     {
                         currentDevice = device;
-
-                        UsbServer.Exit();   // Stop any existing UsbServer's before starting a new one for the chosen device
-                        UsbServer.Start(currentDevice, currentDevice, onUsbDataReceived);
+                        UsbServer.Exit();
+                        UsbServer.Start(device, device, onUsbDataReceived);
                     }
                 }
             }
@@ -131,67 +136,7 @@ namespace RedragonBatteryIcon
                 if (((UsbCommandID)command.id).Equals(UsbCommandID.BatteryLevel))
                 {
                     bs = DataParser.GetDeviceBatteryStatus(command.receivedData);
-                    bool charging = bs.isCharging.Equals(1);
-                    string iconFile = IconFileDefault;
-
-                    if (bs.level <= 10)
-                    {
-                        iconFile += "0";
-                    }
-                    else if (bs.level <= 35)
-                    {
-                        iconFile += "25";
-                    }
-                    else if (bs.level <= 50)
-                    {
-                        iconFile += "50";
-                    }
-                    else if (bs.level <= 75)
-                    {
-                        iconFile += "75";
-                    }
-                    else
-                    {
-                        iconFile += "100";
-                    }
-
-                    if (charging)
-                    {
-                        iconFile += "c";
-                    }
-
-                    iconFile += iconFileExtension;
-
-                    if (bs.level != currentLevel || charging != currentCharging)
-                    {
-                        currentLevel = bs.level;
-                        currentCharging = charging;
-
-                        string newText = bs.level + "%";
-                        string newTextCharging = string.Empty;
-
-                        if (charging)
-                        {
-                            newTextCharging = iconTextCharging;
-                        }
-
-                        BatteryTray.Text = DeviceName + @" > " + newText + newTextCharging;
-                        IAsyncResult batteryDisplayInvoke = batteryDisplay.BeginInvoke((MethodInvoker)delegate { batteryDisplay.ChangeChargeText(newText, newTextCharging); });
-                        batteryDisplay.EndInvoke(batteryDisplayInvoke);
-                    }
-
-                    if (iconFile != currentIconFile)
-                    {
-                        Bitmap newIconBmp = GetIcon(iconFile);
-
-                        if (newIconBmp != null)
-                        {
-                            currentIconFile = iconFile;
-                            BatteryTray.Icon = Icon.FromHandle(newIconBmp.GetHicon());
-                            IAsyncResult batteryDisplayInvoke = batteryDisplay.BeginInvoke((MethodInvoker)delegate { batteryDisplay.ChangeBatteryImage(newIconBmp); });
-                            batteryDisplay.EndInvoke(batteryDisplayInvoke);
-                        }
-                    }
+                    SetIcons(bs.level, bs.isCharging.Equals(1));
                 }
             }
             catch (Exception ex)
@@ -291,9 +236,29 @@ namespace RedragonBatteryIcon
                 LogEntry("CheckOnlineStatus -> " + ex);
             }
         }
+
+        /// <summary>
+        /// For some reason, the stupid DLL that Redragon uses has a handle leak that never gets cleaned up by GC.
+        /// Fetch the current process handle count and if it exceeds a certain amount, restart the application.
+        /// </summary>
+        /// <param name="timerState"></param>
+        private static void Refresh(object timerState)
+        {
+            Process derp = Process.GetCurrentProcess();
+            int handleCount = derp.HandleCount;
+
+            if (handleCount > 2500)
+            {
+                LogEntry($"Restarting app; handle count has reached {handleCount}");
+                Application.Restart();
+            }
+        }
         #endregion
 
         #region Helper Methods
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern bool DestroyIcon(IntPtr handle);
+        
         /// <summary>
         /// Set the device to offline and not charging, and change the tray icon and text to show this
         /// </summary>
@@ -314,7 +279,7 @@ namespace RedragonBatteryIcon
 
                 if (newIconBmp != null)
                 {
-                    BatteryTray.Icon = Icon.FromHandle(newIconBmp.GetHicon());
+                    SetIcon(newIconBmp);
                 }
                 
                 BatteryTray.Text = DeviceName + @" > " + newText + iconTextDisconnected;
@@ -341,11 +306,46 @@ namespace RedragonBatteryIcon
         /// </summary>
         private static void LogEntry(string msg)
         {
-            using (StreamWriter logFile = new StreamWriter(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDoc‌​uments), "RedragonBatteryIcon.log"), true))
+            using (StreamWriter logFile = new StreamWriter(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "RedragonBatteryIcon.log"), true))
             {
                 logFile.WriteLine(DateTime.Now + " -- " + msg);
             }
+        }
 
+        /// <summary>
+        /// Store the last read charge level in a file, similar to LogEntry
+        /// </summary>
+        /// <param name="chargeLevel"></param>
+        private static void StoreLastChargeLevel(int chargeLevel)
+        {
+            using (StreamWriter logFile = new StreamWriter(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "RedragonBatteryIcon_LastChargeLevel.log"), false))
+            {
+                logFile.WriteLine(chargeLevel);
+            }
+        }
+
+        /// <summary>
+        /// Called at launch, this will read the charge level stored in a file
+        /// This will give application restarts an initial value to set, so it's not always unknown
+        /// </summary>
+        private static void GetLastChargeLevel()
+        {
+            string chargeFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "RedragonBatteryIcon_LastChargeLevel.log");
+            
+            if (File.Exists(chargeFile))
+            {
+                byte chargeLevel;
+                
+                using (StreamReader logFile = new StreamReader(chargeFile))
+                {
+                    if (byte.TryParse(logFile.ReadLine(), out chargeLevel))
+                    {
+                        LogEntry($"Setting initial charge level to {chargeLevel}");
+                    }
+                }
+                
+                SetIcons(chargeLevel, false, true);
+            }
         }
 
         /// <summary>
@@ -370,6 +370,98 @@ namespace RedragonBatteryIcon
             }
 
             return icon;
+        }
+
+        /// <summary>
+        /// Set the tray icon to the bitmap passed
+        /// </summary>
+        /// <param name="iconBitmap"></param>
+        private static void SetIcon(Bitmap iconBitmap)
+        {
+            try
+            {
+                Icon newIcon = Icon.FromHandle(iconBitmap.GetHicon());
+                BatteryTray.Icon = newIcon;
+                DestroyIcon(newIcon.Handle);
+            }
+            catch (Exception ex)
+            {
+                LogEntry($"SetIcon() -> {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Set the icons, images, and text for a charge level or charge state change
+        /// </summary>
+        /// <param name="chargeLevel"></param>
+        /// <param name="charging"></param>
+        private static void SetIcons(byte chargeLevel, bool charging, bool initialset = false)
+        {
+            string iconFile = IconFileDefault;
+
+            if (chargeLevel <= 10)
+            {
+                iconFile += "0";
+            }
+            else if (chargeLevel <= 35)
+            {
+                iconFile += "25";
+            }
+            else if (chargeLevel <= 50)
+            {
+                iconFile += "50";
+            }
+            else if (chargeLevel <= 75)
+            {
+                iconFile += "75";
+            }
+            else
+            {
+                iconFile += "100";
+            }
+
+            if (charging)
+            {
+                iconFile += "c";
+            }
+
+            iconFile += iconFileExtension;
+
+            if (chargeLevel != currentLevel || charging != currentCharging)
+            {
+                currentLevel = chargeLevel;
+                currentCharging = charging;
+
+                if (!initialset)
+                {
+                    StoreLastChargeLevel(currentLevel);
+                }
+
+                string newText = chargeLevel + "%";
+                string newTextCharging = string.Empty;
+
+                if (charging)
+                {
+                    newTextCharging = iconTextCharging;
+                }
+
+                BatteryTray.Text = DeviceName + @" > " + newText + newTextCharging;
+                IAsyncResult batteryDisplayInvoke = batteryDisplay.BeginInvoke((MethodInvoker)delegate { batteryDisplay.ChangeChargeText(newText, newTextCharging); });
+                batteryDisplay.EndInvoke(batteryDisplayInvoke);
+            }
+
+            if (iconFile != currentIconFile)
+            {
+                Bitmap newIconBmp = GetIcon(iconFile);
+
+                if (newIconBmp != null)
+                {
+                    currentIconFile = iconFile;
+                    SetIcon(newIconBmp);
+                    IAsyncResult batteryDisplayInvoke = batteryDisplay.BeginInvoke((MethodInvoker)delegate { batteryDisplay.ChangeBatteryImage(newIconBmp); });
+                    batteryDisplay.EndInvoke(batteryDisplayInvoke);
+                }
+            }
         }
         #endregion
     }

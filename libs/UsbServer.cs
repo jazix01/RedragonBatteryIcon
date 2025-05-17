@@ -141,13 +141,13 @@ namespace DriverLib
     [DllImport("hidusb32.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern void UsbServer_GetSlaveVersion();
 
-    public static void UsbServer_Thread()
+    /*public static void UsbServer_Thread()
     {
       if (UsbFinder.isX64System())
         UsbServer.CS_UsbServer_Thread();
       else
         UsbServer.CS_UsbServer_Thread();
-    }
+    }*/
 
     public static void Start(
       string inputEndpoint,

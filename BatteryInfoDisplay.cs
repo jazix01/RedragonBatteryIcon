@@ -12,6 +12,8 @@ namespace RedragonBatteryIcon
         private static bool mouseInsideControl;
         private static bool mouseInsideTray;
         private readonly AutoResetEvent _are = new AutoResetEvent(false);
+        private CancellationTokenSource cts;
+        private CancellationToken ct;
 
         /// <summary>
         /// Create a modal-style box that shows the current battery level and status, along with the device name
@@ -31,6 +33,8 @@ namespace RedragonBatteryIcon
             MouseLeave += MouseLeaveEvent;
             MouseEnter += MouseEnterEvent;
             // ---
+
+            //Click += ControlClickEvent;
         }
 
         #region Public Methods
@@ -66,22 +70,37 @@ namespace RedragonBatteryIcon
 
             if (show)
             {
+                BringToFront();
                 Show();
             }
         }
         #endregion
 
         #region Events
+        private void ControlClickEvent(object sender, EventArgs e)
+        {
+            Hide();
+        }
+        
         private void VisibleChangeEvent(object sender, EventArgs e)
         {
             _are.Reset();
 
             if (Visible)
             {
+                cts = new CancellationTokenSource();
+                ct = cts.Token;
+                
                 Task.Run(() =>
                 {
                     while (true)
                     {
+                        if (ct.IsCancellationRequested)
+                        {
+                            cts.Dispose();
+                            break;
+                        }
+                        
                         if (_are.WaitOne(20)) break;
 
                         if (MouseButtons.Equals(MouseButtons.Right) && !mouseInsideControl || (MouseButtons.Equals(MouseButtons.Left) && !mouseInsideControl && !mouseInsideTray))
@@ -91,14 +110,12 @@ namespace RedragonBatteryIcon
                             break;
                         }
                     }
-                });
-                //Hook.GlobalEvents().MouseClick += MouseClickEvent;
-                //Select();
+                }, cts.Token);
             }
-            /*else
+            else
             {
-                Hook.GlobalEvents().MouseClick -= MouseClickEvent;
-            }*/
+                cts.Cancel();
+            }
         }
 
         /*private void FocusLost(object sender, EventArgs e)
